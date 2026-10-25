@@ -9,6 +9,25 @@ const 下行Grain包字节 = 32 * 1024, 下行Grain尾部阈值 = 512, 下行Gra
 let TCP并发拨号数 = 2, 反代并发拨号数 = 1, 预加载竞速拨号 = false;
 let 连接超时毫秒 = 3000, 反代重试上限 = 5, DNS上游 = '8.8.4.4', DNS备用上游 = '9.9.9.9';
 const 下行背压高水位 = 1 * 1024 * 1024, 下行背压低水位 = 256 * 1024, 下行背压最大等待毫秒 = 30 * 1000;
+let 连接配置下次刷新时间 = 0;
+// 从 KV 的 config.json 读取数据路径可调参数（连接超时/反代重试上限/DNS 上游），每隔 60s 刷新一次以避免热路径频繁读 KV。
+// 优先级：config.json 字段 > 对应环境变量 > 内置默认值。
+async function 加载连接配置(env) {
+	const now = Date.now();
+	if (now < 连接配置下次刷新时间) return;
+	连接配置下次刷新时间 = now + 60000;
+	let cc = null;
+	try {
+		if (env.KV && typeof env.KV.get === 'function') {
+			const raw = await env.KV.get('config.json');
+			if (raw) cc = (JSON.parse(raw) || {}).连接配置 || null;
+		}
+	} catch (e) { cc = null; }
+	连接超时毫秒 = Math.max(500, Number(cc?.连接超时毫秒) || Number(env.CONNECT_TIMEOUT_MS) || 3000);
+	反代重试上限 = Math.max(1, Number(cc?.反代重试上限) || Number(env.PROXY_RETRY_LIMIT) || 5);
+	DNS上游 = String(cc?.DNS上游 || env.DNS_SERVER || '8.8.4.4').trim();
+	DNS备用上游 = String(cc?.DNS备用上游 || env.DNS_SERVER_FALLBACK || '9.9.9.9').trim();
+}
 ///////////////////////////////////////////////////////查杀特征码///////////////////////////////////////////////
 const 特征码字典 = [
 	(Proxy.name + "IP").toUpperCase(),
@@ -42,10 +61,7 @@ export default {
 		反代并发拨号数 = Math.max(1, Number(env.PROXY_CONCURRENT_DIAL) || 反代并发拨号数);
 		TCP并发拨号数 = Math.max(1, Number(env.TCP_CONCURRENT_DIAL) || TCP并发拨号数);
 		if (!env.TCP_CONCURRENT_DIAL && TCP并发拨号数 !== 1 && 识别运营商(request) === 'cmcc') TCP并发拨号数 = 1;
-		连接超时毫秒 = Math.max(500, Number(env.CONNECT_TIMEOUT_MS) || 连接超时毫秒);
-		反代重试上限 = Math.max(1, Number(env.PROXY_RETRY_LIMIT) || 反代重试上限);
-		if (env.DNS_SERVER) DNS上游 = String(env.DNS_SERVER).trim();
-		if (env.DNS_SERVER_FALLBACK) DNS备用上游 = String(env.DNS_SERVER_FALLBACK).trim();
+		await 加载连接配置(env);
 		let 默认反代IP = (`${request.cf.colo}.${特征码字典[0]}.${特征码字典[1]}SsSs.nEt`).toLowerCase(), 默认反代兜底 = true;
 		if (env.PROXYIP) {
 			const proxyIPs = await 整理成数组(env.PROXYIP);
@@ -5473,6 +5489,7 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 			TLS: true,
 		},
 		Fingerprint: "chrome",
+		连接配置: { 连接超时毫秒: 3000, 反代重试上限: 5, DNS上游: '8.8.4.4', DNS备用上游: '9.9.9.9' },
 		优选订阅生成: {
 			local: true, // true: 基于本地的优选地址  false: 优选订阅生成器
 			本地IP库: {
@@ -5635,6 +5652,11 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 	const TLS分片参数 = config_JSON.TLS分片 == 'Shadowrocket' ? `&fragment=${encodeURIComponent('1,40-60,30-50,tlshello')}` : config_JSON.TLS分片 == 'Happ' ? `&fragment=${encodeURIComponent('3,1,tlshello')}` : '';
 	if (!config_JSON.Fingerprint) config_JSON.Fingerprint = "chrome";
 	if (!config_JSON.ECH) config_JSON.ECH = false;
+	if (!config_JSON.连接配置) config_JSON.连接配置 = {};
+	if (!(Number(config_JSON.连接配置.连接超时毫秒) > 0)) config_JSON.连接配置.连接超时毫秒 = 3000;
+	if (!(Number(config_JSON.连接配置.反代重试上限) > 0)) config_JSON.连接配置.反代重试上限 = 5;
+	if (!config_JSON.连接配置.DNS上游) config_JSON.连接配置.DNS上游 = '8.8.4.4';
+	if (!config_JSON.连接配置.DNS备用上游) config_JSON.连接配置.DNS备用上游 = '9.9.9.9';
 	if (!config_JSON.ECHConfig) config_JSON.ECHConfig = { DNS: Ali_DoH, SNI: ECH_SNI };
 	const ECHLINK参数 = config_JSON.ECH ? `&ech=${encodeURIComponent((config_JSON.ECHConfig.SNI ? config_JSON.ECHConfig.SNI + '+' : '') + config_JSON.ECHConfig.DNS)}` : '';
 	const { type: 传输协议, 路径字段名, 域名字段名 } = 获取传输协议配置(config_JSON);
