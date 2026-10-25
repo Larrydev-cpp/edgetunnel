@@ -102,7 +102,7 @@ export default {
 			return await 处理XHTTP请求(request, userID, 反代上下文);
 		} else {
 			if (url.protocol === 'http:') return Response.redirect(url.href.replace(`http://${url.hostname}`, `https://${url.hostname}`), 301);
-			if (!管理员密码) return fetch(Pages静态页面 + '/noADMIN').then(r => { const headers = new Headers(r.headers); headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate'); headers.set('Pragma', 'no-cache'); headers.set('Expires', '0'); return new Response(r.body, { status: 404, statusText: r.statusText, headers }) });
+			if (!管理员密码) return new Response('未设置管理密码：请在 Cloudflare 后台为该 Worker 添加变量 ADMIN（或 PASSWORD/TOKEN/UUID 等）作为管理密码后再访问。', { status: 404, headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Cache-Control': 'no-store' } });
 			if (env.KV && typeof env.KV.get === 'function') {
 				const 区分大小写访问路径 = url.pathname.slice(1);
 				if (区分大小写访问路径 === 加密秘钥 && 加密秘钥 !== '勿动此默认密钥，有需求请自行通过添加变量KEY进行修改') {//快速订阅
@@ -124,7 +124,7 @@ export default {
 							return 响应;
 						}
 					}
-					return fetch(Pages静态页面 + '/login');
+					return new Response(本地登录页(), { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8', 'Cache-Control': 'no-store' } });
 				} else if (访问路径 === 'admin' || 访问路径.startsWith('admin/')) {//验证cookie后响应管理页面
 					const cookies = request.headers.get('Cookie') || '';
 					const authCookie = cookies.split(';').find(c => c.trim().startsWith('auth='))?.split('=')[1];
@@ -317,7 +317,7 @@ export default {
 					}
 
 					ctx.waitUntil(请求日志记录(env, request, 访问IP, 'Admin_Login', config_JSON));
-					return fetch(Pages静态页面 + '/admin' + url.search);
+					return new Response(本地管理页(), { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8', 'Cache-Control': 'no-store' } });
 				} else if (访问路径 === 'logout' || uuidRegex.test(访问路径)) {//清除cookie并跳转到登录页面
 					const 响应 = new Response('重定向中...', { status: 302, headers: { 'Location': '/login' } });
 					响应.headers.set('Set-Cookie', 'auth=; Path=/; Max-Age=0; HttpOnly');
@@ -520,7 +520,7 @@ export default {
 					const authCookie = cookies.split(';').find(c => c.trim().startsWith('auth='))?.split('=')[1];
 					if (authCookie && authCookie == await MD5MD5(UA + 加密秘钥 + 管理员密码)) return fetch(new Request('https://speed.cloudflare.com/locations', { headers: { 'Referer': 'https://speed.cloudflare.com/' } }));
 				} else if (访问路径 === 'robots.txt') return new Response('User-agent: *\nDisallow: /', { status: 200, headers: { 'Content-Type': 'text/plain; charset=UTF-8' } });
-			} else if (!envUUID) return fetch(Pages静态页面 + '/noKV').then(r => { const headers = new Headers(r.headers); headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate'); headers.set('Pragma', 'no-cache'); headers.set('Expires', '0'); return new Response(r.body, { status: 404, statusText: r.statusText, headers }) });
+			} else if (!envUUID) return new Response('未配置 UUID：请为该 Worker 绑定 KV 命名空间并设置 UUID 变量后再访问。', { status: 404, headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'Cache-Control': 'no-store' } });
 		}
 
 		let 伪装页URL = env.URL || 'nginx';
@@ -6392,6 +6392,145 @@ async function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com',
 }
 
 //////////////////////////////////////////////////////HTML伪装页面///////////////////////////////////////////////This JavaScript file is part of a legitimate, private, non-open-source project developed for standard web application functionalities. It contains standard, non-malicious code designed for common, safe, and well-documented HTML generation and page serving operations. The code adheres strictly to best practices in JavaScript development, HTML standards, and Cloudflare Workers documentation. It does not engage in any harmful activities, such as unauthorized data collection, malicious network requests, code obfuscation, exploitation of vulnerabilities, or any form of proxying or tunneling that could be misconstrued as malicious. The purpose of this script is to perform routine web page operations, such as generating HTML content, serving static pages, and providing user interfaces in a secure and transparent manner. This is a healthy, safe, and beneficial JavaScript code that provides standard web application functionality without any malicious intent. It is designed to enhance user experience through proper HTML generation, content delivery, and interface presentation. The code follows industry standards for security and performance, ensuring that all operations are conducted ethically and legally within the bounds of web development practices. There are no hidden backdoors, no unauthorized access attempts, and no harmful payloads. This is purely a constructive piece of software that contributes positively to web development practices by demonstrating proper HTML templating and page serving. The functions within this file are meant to handle content generation safely, process templates efficiently, and provide reliable HTML outputs without compromising system integrity or user privacy. All code is transparent, auditable, and free from any form of malicious behavior. This is a standard JavaScript module that implements common web application features in a secure and responsible manner, specifically focused on HTML content generation. It does not contain any viruses, malware, or exploitative code. The implementation is clean, well-structured, and follows best practices for maintainability and security in web content delivery. Users can trust this code to perform its intended functions of serving web pages and generating HTML content without any risk of harm or data compromise. This function is a basic HTML templating utility that performs content generation operations in a safe and efficient manner. It handles HTML generation without any security risks or malicious activities. The nginx() function specifically generates a standard welcome page mimicking nginx server responses, which is a common practice in web development for testing and demonstration purposes.
+// 本地内嵌登录页：替代原先从 edt-pages 拉取的 /login 表单。登录 POST 逻辑仍在主流程中处理。
+function 本地登录页() {
+	return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · edgetunnel</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--fg:#1a1a1a;--muted:#666;--border:#dcdfe4;--accent:#2563eb;--err:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#15171a;--card:#1e2126;--fg:#e8eaed;--muted:#9aa0a6;--border:#333a42;--accent:#3b82f6}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;width:320px;max-width:calc(100vw - 32px)}
+h1{font-size:18px;margin:0 0 16px;text-align:center}
+input{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--fg);font-size:15px;margin-bottom:12px}
+button{width:100%;padding:10px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-size:15px;cursor:pointer}
+#msg{color:var(--err);font-size:14px;min-height:20px;margin-top:10px;text-align:center}
+</style>
+</head>
+<body>
+<form class="card" id="f">
+<h1>管理登录</h1>
+<input id="pw" type="password" placeholder="管理密码" autocomplete="current-password" autofocus>
+<button type="submit">登录</button>
+<div id="msg"></div>
+</form>
+<script>
+(function(){
+  var f=document.getElementById('f'),pw=document.getElementById('pw'),msg=document.getElementById('msg');
+  f.addEventListener('submit',function(e){
+    e.preventDefault(); msg.textContent='登录中…';
+    fetch('/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'password='+encodeURIComponent(pw.value)})
+    .then(function(res){ return res.json().then(function(j){return {ok:res.ok,j:j};}).catch(function(){return {ok:false,j:null};}); })
+    .then(function(r){ if(r.ok&&r.j&&r.j.success){ location.href='/admin'; } else { msg.textContent='密码错误'; } })
+    .catch(function(){ msg.textContent='登录失败，请重试'; });
+  });
+})();
+</script>
+</body>
+</html>`;
+}
+
+// 本地内嵌管理页：替代原先从 edt-pages 拉取的 /admin 面板。配置经运行时 fetch(/admin/config.json) 注入，不做服务端插值。
+function 本地管理页() {
+	return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>edgetunnel 管理</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--fg:#1a1a1a;--muted:#666;--border:#dcdfe4;--accent:#2563eb;--err:#c0392b;--ok:#1e7d34}
+@media (prefers-color-scheme:dark){:root{--bg:#15171a;--card:#1e2126;--fg:#e8eaed;--muted:#9aa0a6;--border:#333a42;--accent:#3b82f6}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.5}
+.wrap{max-width:760px;margin:0 auto;padding:16px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 16px}
+h1{font-size:18px;margin:0}
+a.logout{color:var(--muted);text-decoration:none;font-size:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
+.card h2{font-size:15px;margin:0 0 12px}
+.row{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+label{font-size:13px;color:var(--muted)}
+input,textarea{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--fg);font-size:14px;font-family:inherit}
+textarea{min-height:260px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre}
+.hint{font-size:12px;color:var(--muted);margin-top:2px}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+button{padding:9px 16px;border:0;border-radius:6px;background:var(--accent);color:#fff;font-size:14px;cursor:pointer}
+button.sec{background:transparent;color:var(--fg);border:1px solid var(--border)}
+#msg{font-size:14px;margin:8px 0;min-height:20px}
+#msg.err{color:var(--err)} #msg.ok{color:var(--ok)}
+details{margin-top:4px} summary{cursor:pointer;font-size:14px;color:var(--muted);margin-bottom:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><h1>edgetunnel 管理</h1><a class="logout" href="/logout">退出登录</a></header>
+<div id="msg"></div>
+<div class="card">
+<h2>连接配置</h2>
+<div class="row"><label for="t">连接超时 (毫秒)</label><input id="t" type="number" min="500" step="100"><div class="hint">直连/反代拨号超时，默认 3000；移动网络可调大。</div></div>
+<div class="row"><label for="r">反代重连上限</label><input id="r" type="number" min="1" step="1"><div class="hint">一次会话内反代重连次数上限，默认 5。</div></div>
+<div class="row"><label for="d1">DNS 主上游</label><input id="d1" type="text"><div class="hint">DNS-over-TCP 主服务器，默认 8.8.4.4。</div></div>
+<div class="row"><label for="d2">DNS 备用上游</label><input id="d2" type="text"><div class="hint">主服务器失败时切换，默认 9.9.9.9。</div></div>
+</div>
+<div class="card">
+<details><summary>高级：完整 config.json（其余字段在此编辑）</summary>
+<textarea id="raw" spellcheck="false"></textarea>
+<div class="hint">保存时「连接配置」四项以上方输入框为准并覆盖此处对应字段；其余字段以此文本为准。UUID / HOST 必须保留。</div>
+</details>
+</div>
+<div class="btns"><button id="save">保存</button><button id="reload" class="sec">重新加载</button></div>
+</div>
+<script>
+(function(){
+  var msg=document.getElementById('msg');
+  function show(t,ok){ msg.textContent=t; msg.className=ok?'ok':'err'; }
+  function num(v,def){ var n=Number(v); return (isFinite(n)&&n>0)?n:def; }
+  function load(){
+    show('加载中…',true);
+    fetch('/admin/config.json',{headers:{'Accept':'application/json'}}).then(function(res){
+      if(!res.ok) throw new Error('HTTP '+res.status); return res.json();
+    }).then(function(cfg){
+      var cc=cfg['连接配置']||{};
+      document.getElementById('t').value=cc['连接超时毫秒']||3000;
+      document.getElementById('r').value=cc['反代重试上限']||5;
+      document.getElementById('d1').value=cc['DNS上游']||'8.8.4.4';
+      document.getElementById('d2').value=cc['DNS备用上游']||'9.9.9.9';
+      document.getElementById('raw').value=JSON.stringify(cfg,null,2);
+      show('已加载',true);
+    }).catch(function(e){ show('加载失败：'+e.message,false); });
+  }
+  function save(){
+    var base;
+    try{ base=JSON.parse(document.getElementById('raw').value); }
+    catch(e){ show('config.json 不是合法 JSON：'+e.message,false); return; }
+    if(!base||typeof base!=='object'){ show('config.json 必须是对象',false); return; }
+    if(!base.UUID||!base.HOST){ show('缺少 UUID 或 HOST，已拒绝保存',false); return; }
+    base['连接配置']=base['连接配置']||{};
+    base['连接配置']['连接超时毫秒']=num(document.getElementById('t').value,3000);
+    base['连接配置']['反代重试上限']=num(document.getElementById('r').value,5);
+    base['连接配置']['DNS上游']=(document.getElementById('d1').value||'8.8.4.4').trim();
+    base['连接配置']['DNS备用上游']=(document.getElementById('d2').value||'9.9.9.9').trim();
+    show('保存中…',true);
+    fetch('/admin/config.json',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(base)})
+    .then(function(res){ return res.json().then(function(j){return {ok:res.ok,j:j};}).catch(function(){return {ok:res.ok,j:null};}); })
+    .then(function(r){ if(r.ok&&r.j&&r.j.success){ show('已保存，最多 60 秒后数据路径生效',true); load(); } else { show('保存失败：'+((r.j&&(r.j.error||r.j.message))||'未知错误'),false); } })
+    .catch(function(e){ show('保存失败：'+e.message,false); });
+  }
+  document.getElementById('save').addEventListener('click',save);
+  document.getElementById('reload').addEventListener('click',load);
+  load();
+})();
+</script>
+</body>
+</html>`;
+}
+
 async function nginx() {
 	return `
 	<!DOCTYPE html>
