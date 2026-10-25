@@ -7,6 +7,8 @@ const WS早期数据最大字节 = 8 * 1024, WS早期数据最大头长度 = Mat
 const 上行合包目标字节 = 20 * 1024, 上行队列最大字节 = 16 * 1024 * 1024, 上行队列最大条目 = 4096;
 const 下行Grain包字节 = 32 * 1024, 下行Grain尾部阈值 = 512, 下行Grain低水位字节 = Math.max(4096, 下行Grain尾部阈值 * 12), 下行Grain最大等待轮次 = 4;
 let TCP并发拨号数 = 2, 反代并发拨号数 = 1, 预加载竞速拨号 = false;
+let 连接超时毫秒 = 3000, 反代重试上限 = 5, DNS上游 = '8.8.4.4', DNS备用上游 = '9.9.9.9';
+const 下行背压高水位 = 1 * 1024 * 1024, 下行背压低水位 = 256 * 1024, 下行背压最大等待毫秒 = 30 * 1000;
 ///////////////////////////////////////////////////////查杀特征码///////////////////////////////////////////////
 const 特征码字典 = [
 	(Proxy.name + "IP").toUpperCase(),
@@ -40,6 +42,10 @@ export default {
 		反代并发拨号数 = Math.max(1, Number(env.PROXY_CONCURRENT_DIAL) || 反代并发拨号数);
 		TCP并发拨号数 = Math.max(1, Number(env.TCP_CONCURRENT_DIAL) || TCP并发拨号数);
 		if (!env.TCP_CONCURRENT_DIAL && TCP并发拨号数 !== 1 && 识别运营商(request) === 'cmcc') TCP并发拨号数 = 1;
+		连接超时毫秒 = Math.max(500, Number(env.CONNECT_TIMEOUT_MS) || 连接超时毫秒);
+		反代重试上限 = Math.max(1, Number(env.PROXY_RETRY_LIMIT) || 反代重试上限);
+		if (env.DNS_SERVER) DNS上游 = String(env.DNS_SERVER).trim();
+		if (env.DNS_SERVER_FALLBACK) DNS备用上游 = String(env.DNS_SERVER_FALLBACK).trim();
 		let 默认反代IP = (`${request.cf.colo}.${特征码字典[0]}.${特征码字典[1]}SsSs.nEt`).toLowerCase(), 默认反代兜底 = true;
 		if (env.PROXYIP) {
 			const proxyIPs = await 整理成数组(env.PROXYIP);
@@ -2087,7 +2093,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 	const ctx反代兜底 = 反代上下文.反代兜底 !== undefined ? 反代上下文.反代兜底 : true;
 	let 反代数组索引 = 0;
 	log(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'}`);
-	const 连接超时毫秒 = 1000;
+	let 反代重试次数 = 0;
 	let 已通过代理发送首包 = false;
 	const TCP连接 = 创建请求TCP连接器(request);
 	const 使用木马反代 = 允许木马反代 && (反代上下文.木马反代地址 || null);
@@ -2116,6 +2122,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			throw new Error('connection superseded or client closed');
 		}
 		remoteConnWrapper.socket = socket;
+		反代重试次数 = 0;
 		connectStreams(socket, ws, 取出响应头, retryFunc, 连接仍有效, remoteConnWrapper).catch(err => {
 			if (!连接仍有效()) return;
 			log(`[TCP下行] 处理失败: ${err?.message || err}`);
@@ -2265,6 +2272,17 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			await remoteConnWrapper.connectingPromise;
 			return;
 		}
+		反代重试次数++;
+		if (反代重试次数 > 反代重试上限) {
+			log(`[断连] 反代重连超上限: 第 ${反代重试次数} 次 > ${反代重试上限}，停止重连`);
+			closeSocketQuietly(ws);
+			throw new Error('proxy retry limit exceeded');
+		}
+		if (反代重试次数 > 1) {
+			const 退避毫秒 = Math.min(200 * (反代重试次数 - 1), 1000);
+			log(`[反代连接] 第 ${反代重试次数} 次重连，退避 ${退避毫秒}ms`);
+			await new Promise(r => setTimeout(r, 退避毫秒));
+		}
 		const { generation: 当前连接世代, downlinkDrain } = 开始TCP连接世代(remoteConnWrapper);
 
 		let 本次发送首包 = false, 本次首包数据 = null;
@@ -2376,41 +2394,50 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 async function forwardataudp(udpChunk, webSocket, respHeader, request, 响应封装器 = null) {
 	const 请求数据 = 数据转Uint8Array(udpChunk);
 	const 请求字节数 = 请求数据.byteLength;
-	log(`[UDP转发] 收到 DNS 请求: ${请求字节数}B -> 8.8.4.4:53`);
-	try {
-		const TCP连接 = 创建请求TCP连接器(request);
-		const tcpSocket = TCP连接({ hostname: '8.8.4.4', port: 53 });
-		let 魏烈思Header = respHeader;
-		const writer = tcpSocket.writable.getWriter();
-		await writer.write(请求数据);
-		log(`[UDP转发] DNS 请求已写入上游: ${请求字节数}B`);
-		writer.releaseLock();
-		await tcpSocket.readable.pipeTo(new WritableStream({
-			async write(chunk) {
-				const 原始响应 = 数据转Uint8Array(chunk);
-				log(`[UDP转发] 收到 DNS 响应: ${原始响应.byteLength}B`);
-				const 封装结果 = 响应封装器 ? await 响应封装器(原始响应) : 原始响应;
-				const 发送片段列表 = Array.isArray(封装结果) ? 封装结果 : [封装结果];
-				if (!发送片段列表.length) return;
-				if (webSocket.readyState !== WebSocket.OPEN) return;
-				for (const fragment of 发送片段列表) {
-					const 转发响应 = 数据转Uint8Array(fragment);
-					if (!转发响应.byteLength) continue;
-					if (魏烈思Header) {
-						const response = new Uint8Array(魏烈思Header.length + 转发响应.byteLength);
-						response.set(魏烈思Header, 0);
-						response.set(转发响应, 魏烈思Header.length);
-						await WebSocket发送并等待(webSocket, response.buffer);
-						魏烈思Header = null;
-					} else {
-						await WebSocket发送并等待(webSocket, 转发响应);
+	const DNS服务器列表 = [...new Set([DNS上游, DNS备用上游].filter(Boolean))];
+	let 最后错误 = null;
+	for (const DNS服务器 of DNS服务器列表) {
+		let 已收到响应 = false;
+		log(`[UDP转发] DNS 请求: ${请求字节数}B -> ${DNS服务器}:53`);
+		try {
+			const TCP连接 = 创建请求TCP连接器(request);
+			const tcpSocket = TCP连接({ hostname: DNS服务器, port: 53 });
+			let 魏烈思Header = respHeader;
+			const writer = tcpSocket.writable.getWriter();
+			await writer.write(请求数据);
+			writer.releaseLock();
+			await tcpSocket.readable.pipeTo(new WritableStream({
+				async write(chunk) {
+					已收到响应 = true;
+					const 原始响应 = 数据转Uint8Array(chunk);
+					log(`[UDP转发] 收到 DNS 响应: ${原始响应.byteLength}B`);
+					const 封装结果 = 响应封装器 ? await 响应封装器(原始响应) : 原始响应;
+					const 发送片段列表 = Array.isArray(封装结果) ? 封装结果 : [封装结果];
+					if (!发送片段列表.length) return;
+					if (webSocket.readyState !== WebSocket.OPEN) return;
+					for (const fragment of 发送片段列表) {
+						const 转发响应 = 数据转Uint8Array(fragment);
+						if (!转发响应.byteLength) continue;
+						if (魏烈思Header) {
+							const response = new Uint8Array(魏烈思Header.length + 转发响应.byteLength);
+							response.set(魏烈思Header, 0);
+							response.set(转发响应, 魏烈思Header.length);
+							await WebSocket发送并等待(webSocket, response.buffer);
+							魏烈思Header = null;
+						} else {
+							await WebSocket发送并等待(webSocket, 转发响应);
+						}
 					}
-				}
-			},
-		}));
-	} catch (error) {
-		log(`[UDP转发] DNS 转发失败: ${error?.message || error}`);
+				},
+			}));
+			return;
+		} catch (error) {
+			最后错误 = error;
+			log(`[UDP转发] DNS(${DNS服务器}) 失败: ${error?.message || error}`);
+			if (已收到响应) return;
+		}
 	}
+	log(`[断连] DNS 全部上游失败: ${最后错误?.message || 最后错误}`);
 }
 
 function closeSocketQuietly(socket) {
@@ -2694,11 +2721,27 @@ function 创建下行Grain发送器(webSocket, headerData = null, isActive = nul
 		if (当前发送器有效()) closeSocketQuietly(webSocket);
 	};
 
+	const 等待下行可写 = async () => {
+		if (typeof webSocket.bufferedAmount !== 'number') return;
+		if (webSocket.bufferedAmount <= 下行背压高水位) return;
+		const 截止时间 = Date.now() + 下行背压最大等待毫秒;
+		while (webSocket.bufferedAmount > 下行背压低水位) {
+			if (!当前发送器有效() || webSocket.readyState !== WebSocket.OPEN) return;
+			if (Date.now() > 截止时间) {
+				log(`[断连] 下行背压超时: 客户端缓冲 ${webSocket.bufferedAmount}B 长时间未排空`);
+				closeSocketQuietly(webSocket);
+				throw new Error('downlink backpressure wait timeout');
+			}
+			await new Promise(r => setTimeout(r, 5));
+		}
+	};
+
 	const 发送原始块 = async (chunk) => {
 		if (!当前发送器有效()) return;
 		if (webSocket.readyState !== WebSocket.OPEN) throw new Error('ws.readyState is not open');
 		chunk = 附加响应头(chunk);
 		await WebSocket发送并等待(webSocket, chunk);
+		await 等待下行可写();
 	};
 
 	const 串行发送原始块 = async (chunk) => {
